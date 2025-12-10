@@ -11,3 +11,328 @@ execute:
   warning: false
   message: false
 ---
+
+```{r}
+library(dplyr)
+
+```
+
+
+
+```{r}
+#| results: "hide"
+NEON_soilMAGs_soilChem <- read.csv("NEON_soilMAGs_soilChem.csv")
+```
+
+
+Step 0: I provided the entire dataset to Co-pilot, and I said that I wanted to look into Communtiy interactions / co-occurence / network analysis.
+
+My ideas for things to look into (before really seeing where Ai takes it):
+
+-first filter to find dominant taxa
+
+-find where these are located
+
+-arrange in order of scaffold completeness
+
+-compare scaffold completeness to gene count
+
+-compare gene count to different rRNAs
+
+-compare these gene counts to soil chemistry / pH
+
+Disclaimer: All of the following codes were created by Ai. This was an excericse in trying to come up with prompts / follow-up questions.
+
+Dominant Phylum:
+
+Arranged the top 10 dominant phylum. This was determined based on the phylums thath ad the most samples within the table.
+
+```{r}
+dominant_phylum <- NEON_soilMAGs_soilChem |>
+  count(phylum, sort = TRUE)
+
+head(dominant_phylum, 10)  # Top 10 genera
+```
+
+Dominant Genus:
+
+The same code as above was run on genus to identify the dominant genus.
+
+```{r}
+library(tidyverse)
+
+# Count how many MAGs belong to each genus
+dominant_genus <- NEON_soilMAGs_soilChem %>%
+  count(genus, sort = TRUE)
+
+head(dominant_genus, 10)  # Top 10 genera
+
+```
+
+Dominant Species:
+
+This was repeated again to identify the dominant species.
+
+```{r}
+dominant_species <- NEON_soilMAGs_soilChem %>%
+  count(bin_lineage, sort = TRUE)
+
+head(dominant_species, 10)
+
+```
+
+Then, I wanted to see the overall dominant taxonomy, by combining the findings from the above tables. This code essentially combines them into 1 column.
+
+```{r}
+library(tidyverse)
+
+
+# Combine phylum, genus, and species into one string
+soilMAGs <- NEON_soilMAGs_soilChem %>%
+  mutate(taxonomy = paste(phylum, genus, bin_lineage, sep = ";"))
+
+# Count occurrences of each combined taxonomy
+dominant_taxa <- soilMAGs %>%
+  count(taxonomy, sort = TRUE)
+
+head(dominant_taxa, 10)  # Top 10 dominant taxa
+
+```
+
+I then wanted to represent the findings from above in the table below.
+
+```{r}
+NEON_soilMAGs_soilChem %>%
+  count(phylum, genus, bin_lineage) %>%
+  ggplot(aes(x = phylum, y = n, fill = genus)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Dominant taxa by phylum, genus, species",
+       x = "Phylum", y = "Count")
+
+```
+
+```{r}
+library(tidyverse)
+
+dominant_species_by_site <- NEON_soilMAGs_soilChem %>%
+  group_by(site, decimalLatitude, decimalLongitude, bin_lineage) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(site) %>%
+  slice_max(order_by = count, n = 1)  # keep only the dominant taxon per site
+print(dominant_species_by_site)
+```
+
+```{r}
+library(ggplot2)
+library(maps)
+
+# Base map of the US (adjust region if needed)
+us_map <- map_data("state")
+
+ggplot() +
+  geom_polygon(data = us_map, aes(x = long, y = lat, group = group),
+               fill = "gray90", color = "white") +
+  geom_point(data = dominant_species_by_site,
+             aes(x = decimalLongitude, y = decimalLatitude, color = bin_lineage),
+             size = 3) +
+  coord_fixed(ratio=1.5) +
+   xlim(-125, -65) +   # Wider longitude range for US
+  ylim(25, 50)      # Latitude range
+  labs(title = "Dominant species by site",
+       x = "Longitude", y = "Latitude", color = "Species") +
+  theme_minimal()
+
+```
+
+
+```{r}
+dominant_species_tRNA <- dominant_species_by_site %>%
+  left_join(NEON_soilMAGs_soilChem %>%
+              select(decimalLongitude, decimalLatitude, bin_lineage, t_rna_genes),
+            by = c("decimalLongitude", "decimalLatitude", "bin_lineage"))
+print(dominant_species_tRNA)
+```
+
+
+connecting tRNA with soil chemistry values (suggested by copilot)
+
+Then, I wanted to associate tRNA with soil chemistry values. Co-pilot suggested this, and I thought that this would be a great connection to make, for tRNA provides insight into the amount of genes being expressed by the species. It would be interesting to see if certain aspects of the soil chemistry affected this. With further exploration (like somehow to look into what genes these tRNAs were translating to) it could provide insight into how the soil influences species composition.
+
+```{r}
+NEON_soilMAGs_soilChem_unique <- NEON_soilMAGs_soilChem %>%
+  distinct(site, bin_lineage, .keep_all = TRUE)
+
+dominant_species_tRNA <- dominant_species_by_site %>%
+  left_join(NEON_soilMAGs_soilChem_unique %>%
+              select(site, bin_lineage, t_rna_genes),
+            by = c("site", "bin_lineage"))
+```
+
+
+```{r}
+dominant_species_env <- dominant_species_by_site %>%
+  left_join(NEON_soilMAGs_soilChem_unique %>%
+              select(site, bin_lineage, t_rna_genes,
+                     soilMoisture, soilTemp, soilInWaterpH, soilInCaClpH),
+            by = c("site", "bin_lineage"))
+print (dominant_species_env)
+```
+
+
+This summarizes the data from above to connect the average tRNA and environemntal properties for the priamry bin_lineages.
+
+```{r}
+species_env_summary <- dominant_species_env %>%
+  group_by(bin_lineage) %>%
+  summarise(avg_trna = mean(t_rna_genes, na.rm = TRUE),
+            avg_moisture = mean(soilMoisture, na.rm = TRUE),
+            avg_temp = mean(soilTemp, na.rm = TRUE),
+            avg_pH_water = mean(soilInWaterpH, na.rm = TRUE),
+            avg_pH_CaCl = mean(soilInCaClpH, na.rm = TRUE),
+            n_sites = n())
+print (species_env_summary)
+```
+
+```{r}
+str(species_env_summary)
+```
+
+```{r}
+df <- species_env_summary %>%
+  filter(!is.na(avg_trna), !is.na(avg_moisture))
+
+cor.test(df$avg_trna, df$avg_moisture, method = "spearman")
+
+```
+
+A spearman analysis was then run to determine the correlation between tRNA and soil moisture. I know I learned about spearman analysis before, but I could not remember what the test exactly. According to this site: https://statistics.laerd.com/statistical-guides/spearmans-rank-order-correlation-statistical-guide.php, spearman analyses are used to assess the relationship between two individual variables. In this example, the relationship recieves a p-value of 0.828. This p-value is pretty close to 1, so there a decent chance that these two variables are pretty strongly related.
+
+```{r}
+cor.test(
+  as.numeric(species_env_summary[["avg_trna"]]),
+  as.numeric(species_env_summary[["avg_moisture"]]),
+  method = "spearman",
+  use = "complete.obs"
+)
+
+```
+
+```{r}
+species_env_summary <- dominant_species_env %>%
+  group_by(bin_lineage) %>%
+  summarise(
+    avg_tRNA        = mean(as.numeric(t_rna_genes), na.rm = TRUE),
+    avg_moisture    = mean(as.numeric(soilMoisture), na.rm = TRUE),
+    avg_temp        = mean(as.numeric(soilTemp), na.rm = TRUE),
+    avg_pH_water    = mean(as.numeric(soilInWaterpH), na.rm = TRUE),
+    avg_pH_CaCl     = mean(as.numeric(soilInCaClpH), na.rm = TRUE),
+    .groups = "drop"
+  )
+print (species_env_summary)
+```
+
+This code ran another correlation test to determine the association of tRNA with other features of the soil. The results of this test are displayed below. Interestingly, it appears that the specific correlations are relatively low with the highest correlation between tRNA displayed with soil temperature. The p value is greatest with the average moisture. Although I am sure that I learned this in stats, I needed to refresh my memory on the difference between the correlation value and the p-value. According to this article, https://dataschool.com/fundamentals-of-analysis/correlation-and-p-value/, the key difference is the correlation value indicates if there is a relationship and if this is a positive or negative relationship, while the p - value is what determines if it is actually statistically significant. To be considered statistically significant, one would need a p value that is less than 0.05. That is not the case here, so the correlation between these features is simply a coincidence.  
+
+```{r}
+run_corr <- function(df, x, yvars) {
+  results <- lapply(yvars, function(y) {
+    xvec <- df[[x]]
+    yvec <- df[[y]]
+    
+    # Only run if at least 2 finite values
+    if(sum(is.finite(xvec) & is.finite(yvec)) >= 2) {
+      test <- cor.test(xvec, yvec, method = "spearman", use = "complete.obs")
+      data.frame(
+        variable = y,
+        correlation = test$estimate,
+        p_value = test$p.value
+      )
+    } else {
+      data.frame(variable = y, correlation = NA, p_value = NA)
+    }
+  })
+  do.call(rbind, results)
+}
+```
+
+```{r}
+soil_vars <- c("avg_moisture", "avg_temp", "avg_pH_water", "avg_pH_CaCl")
+
+corr_results <- run_corr(species_env_summary, "avg_tRNA", soil_vars)
+print(corr_results)
+
+```
+
+Then to visualize the results of these correlation stats, a table was created.
+
+```{r}
+ggplot(corr_results, aes(x = variable, y = correlation)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(correlation, 2)), vjust = -0.5) +
+  labs(title = "Correlation of tRNA gene counts with soil chemistry",
+       x = "Soil variable", y = "Spearman correlation")
+
+```
+
+```{r}
+ sum(is.na(species_env_summary$bin_lineage))
+
+```
+
+```{r}
+species_env_summary <- species_env_summary %>%
+  filter(!is.na(bin_lineage))
+```
+
+```{r}
+species_env_summary <- species_env_summary %>%
+  distinct(bin_lineage, .keep_all = TRUE)
+```
+
+```{r}
+species_env_matrix <- species_env_summary %>%
+  column_to_rownames("bin_lineage")
+```
+
+```{r}
+species_env_matrix <- species_env_summary %>%
+  select(bin_lineage, avg_tRNA, avg_moisture, avg_temp, avg_pH_water, avg_pH_CaCl) %>%
+  column_to_rownames("bin_lineage")
+```
+
+```{r}
+species_env_scaled <- scale(species_env_matrix)
+```
+
+A PCA analysis was run as another way to visualize the correlation between tRNA and soil composition and to map the dominant lineages onto it. I have never done a PCA analysis before so this also required some additional research. According to https://www.ibm.com/think/topics/principal-component-analysis, PCA analysis illustrates relationships between a few data points.  
+
+```{r}
+pca_result <- prcomp(species_env_scaled, center = TRUE, scale. = TRUE)
+
+# Scree plot
+plot(pca_result, type = "l")
+
+# Biplot
+biplot(pca_result, main = "PCA of dominant species, tRNA counts, and soil chemistry")
+
+```
+And finally, the results of the two previous graphs were essentially combined to create a graph of the dominant species also with the specific soil characteristics. Ai suggested that I perform an NMDS analysis, which I also was not familiar with. According to this site, https://library.virginia.edu/data/articles/starting-non-metric-multidimensional-scaling-nmds, it appears to serve almost the same purpose as the PCA analysis, for it decreases the amount of data pints to make predictions about the relationships between specific variables. 
+
+
+
+```{r}
+library(vegan)
+nmds_result <- metaMDS(species_env_scaled, distance = "euclidean", k = 2)
+
+plot(nmds_result, type = "t", main = "NMDS of dominant species vs. tRNA and soil chemistry")
+
+```
+
+```{r}
+envfit_result <- envfit(nmds_result ~ avg_moisture + avg_temp + avg_pH_water + avg_pH_CaCl,
+                        data = species_env_summary, permutations = 999)
+
+plot(nmds_result, type = "t")
+plot(envfit_result, col = "red")  # arrows showing environmental gradients
+
+```
